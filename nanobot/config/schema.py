@@ -274,6 +274,21 @@ class ToolsConfig(Base):
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
 
+class LoggingConfig(Base):
+    """Logging configuration."""
+
+    level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
+    file: str = ""  # Log file path (e.g. "~/.nanobot/logs/nanobot.log"). Empty = no file logging.
+    format: str = (
+        "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+        "<level>{level: <8}</level> | "
+        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+        "<level>{message}</level>"
+    )
+    rotation: str = "10 MB"  # Log file rotation size
+    retention: str = "7 days"  # How long to keep old log files
+
+
 class Config(BaseSettings):
     """Root configuration for nanobot."""
 
@@ -282,6 +297,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     @property
     def workspace_path(self) -> Path:

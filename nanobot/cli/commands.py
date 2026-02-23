@@ -276,6 +276,10 @@ def _make_provider(config: Config):
 def gateway(
     port: int = typer.Option(18790, "--port", "-p", help="Gateway port"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    log_level: str = typer.Option(
+        None, "--log-level", "-l",
+        help="Log level: DEBUG, INFO, WARNING, ERROR (overrides config)",
+    ),
 ):
     """Start the nanobot gateway."""
     from nanobot.config.loader import load_config, get_data_dir
@@ -286,14 +290,16 @@ def gateway(
     from nanobot.cron.service import CronService
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
-    
-    if verbose:
-        import logging
-        logging.basicConfig(level=logging.DEBUG)
+    from nanobot.logging import setup_logging
     
     console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
     
     config = load_config()
+
+    # Resolve effective log level: --log-level > --verbose > config
+    effective_level = log_level.upper() if log_level else ("DEBUG" if verbose else None)
+    setup_logging(config.logging, level=effective_level)
+
     bus = MessageBus()
     provider = _make_provider(config)
     session_manager = SessionManager(config.workspace_path)
@@ -435,6 +441,10 @@ def agent(
     session_id: str = typer.Option("cli:direct", "--session", "-s", help="Session ID"),
     markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
     logs: bool = typer.Option(False, "--logs/--no-logs", help="Show nanobot runtime logs during chat"),
+    log_level: str = typer.Option(
+        None, "--log-level", "-l",
+        help="Log level: DEBUG, INFO, WARNING, ERROR (implies --logs)",
+    ),
 ):
     """Interact with the agent directly."""
     from nanobot.config.loader import load_config, get_data_dir
@@ -442,8 +452,13 @@ def agent(
     from nanobot.agent.loop import AgentLoop
     from nanobot.cron.service import CronService
     from loguru import logger
+    from nanobot.logging import setup_logging
     
     config = load_config()
+
+    # --log-level implies --logs
+    if log_level:
+        logs = True
     
     bus = MessageBus()
     provider = _make_provider(config)
@@ -453,7 +468,7 @@ def agent(
     cron = CronService(cron_store_path)
 
     if logs:
-        logger.enable("nanobot")
+        setup_logging(config.logging, level=log_level.upper() if log_level else None)
     else:
         logger.disable("nanobot")
     
@@ -1032,6 +1047,79 @@ def status():
             else:
                 has_key = bool(p.api_key)
                 console.print(f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}")
+
+
+# ============================================================================
+# Logs Command
+# ============================================================================
+
+
+@app.command()
+def logs(
+    follow: bool = typer.Option(False, "--follow", "-f", help="Follow log output in real-time"),
+    lines: int = typer.Option(40, "--lines", "-n", help="Number of recent lines to show"),
+    file: str = typer.Option(None, "--file", help="Log file path (overrides config)"),
+):
+    """View nanobot logs.
+
+    Shows the log file configured in ~/.nanobot/config.json under
+    ``logging.file``.  Use ``-f`` to tail the file in real-time.
+    """
+    import time
+    from nanobot.config.loader import load_config
+    from nanobot.logging import get_default_log_file
+
+    config = load_config()
+    log_path_str = file or config.logging.file
+    if not log_path_str:
+        # Suggest the default path
+        default = get_default_log_file()
+        console.print("[yellow]No log file configured.[/yellow]")
+        console.print(
+            f"\nTo enable file logging, add to [cyan]~/.nanobot/config.json[/cyan]:\n"
+            f'  [green]{{"logging": {{"file": "{default}"}}}}[/green]\n'
+        )
+        console.print(
+            "Or start the gateway/agent with real-time stderr logs:\n"
+            "  [cyan]nanobot gateway --log-level DEBUG[/cyan]\n"
+            "  [cyan]nanobot agent --logs[/cyan]"
+        )
+        raise typer.Exit(0)
+
+    log_path = Path(log_path_str).expanduser()
+    if not log_path.exists():
+        console.print(f"[yellow]Log file not found: {log_path}[/yellow]")
+        console.print("The file will be created once nanobot starts logging.")
+        raise typer.Exit(1)
+
+    # Read last N lines
+    try:
+        all_lines = log_path.read_text(encoding="utf-8").splitlines()
+    except Exception as e:
+        console.print(f"[red]Error reading log file: {e}[/red]")
+        raise typer.Exit(1)
+
+    tail = all_lines[-lines:] if len(all_lines) > lines else all_lines
+    for line in tail:
+        console.print(line)
+
+    if not follow:
+        return
+
+    # Tail mode: watch for new content
+    console.print(f"\n[dim]--- Following {log_path} (Ctrl+C to stop) ---[/dim]\n")
+    try:
+        with open(log_path, encoding="utf-8") as fh:
+            # Seek to end
+            fh.seek(0, 2)
+            while True:
+                line = fh.readline()
+                if line:
+                    console.print(line, end="")
+                else:
+                    time.sleep(0.3)
+    except KeyboardInterrupt:
+        console.print("\n[dim]Stopped.[/dim]")
 
 
 # ============================================================================
