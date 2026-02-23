@@ -154,6 +154,36 @@ class AgentLoop:
             if isinstance(cron_tool, CronTool):
                 cron_tool.set_context(channel, chat_id)
 
+    # Patterns that indicate the model is claiming to have performed actions.
+    # Covers English and Chinese action-claiming language.
+    _ACTION_CLAIM_PATTERNS: list[re.Pattern[str]] = [
+        re.compile(p, re.IGNORECASE)
+        for p in [
+            # English patterns
+            r"I(?:'ve| have) (?:successfully |already )?(?:created|written|executed|run|installed|"
+            r"deployed|configured|set up|updated|modified|deleted|removed|sent|fetched|downloaded|"
+            r"uploaded|completed|finished|done|built|compiled|started|launched|saved|generated|"
+            r"implemented|fixed|resolved|applied|made the changes)",
+            r"(?:file|script|program|code|command|task|operation|process) (?:has been|was) "
+            r"(?:successfully )?(?:created|written|executed|completed|saved|updated|run|built|deployed)",
+            r"(?:here(?:'s| is) (?:the|what) (?:I did|I've done|happened|the result))",
+            r"(?:changes|modifications|updates) (?:have been|were) (?:successfully )?(?:applied|made|saved|completed)",
+            # Chinese patterns
+            r"已(?:成功)?(?:创建|写入|执行|运行|安装|部署|配置|设置|更新|修改|删除|移除|发送|"
+            r"获取|下载|上传|完成|构建|编译|启动|保存|生成|实现|修复|解决|应用)",
+            r"(?:文件|脚本|程序|代码|命令|任务|操作)已(?:成功)?(?:创建|写入|执行|完成|保存|更新|运行|构建|部署)",
+            r"(?:更改|修改|更新)已(?:成功)?(?:应用|完成|保存)",
+            r"任务已(?:成功)?完成",
+        ]
+    ]
+
+    @staticmethod
+    def _claims_action(text: str) -> bool:
+        """Check if text contains language claiming actions were performed."""
+        if not text:
+            return False
+        return any(p.search(text) for p in AgentLoop._ACTION_CLAIM_PATTERNS)
+
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
         """Remove <think>…</think> blocks that some models embed in content."""
@@ -234,6 +264,95 @@ class AgentLoop:
                 f"I reached the maximum number of tool call iterations ({self.max_iterations}) "
                 "without completing the task. You can try breaking the task into smaller steps."
             )
+
+        # --- Hallucination guard ---
+        # If the model claims to have performed actions but never called any
+        # tools, it is likely hallucinating.  Re-prompt once to force it to
+        # either use tools or respond honestly.
+        if (
+            final_content
+            and not tools_used
+            and self._claims_action(final_content)
+            and iteration < self.max_iterations
+        ):
+            logger.warning("Hallucination guard triggered — response claims actions without tool calls")
+            correction = (
+                "IMPORTANT CORRECTION: Your previous response claimed to have performed actions "
+                "(e.g. created files, executed commands, completed tasks), but you did NOT call "
+                "any tools. You must ACTUALLY use tools to perform actions — describing them in "
+                "text does not execute them. Please either:\n"
+                "1. Use the appropriate tools to actually perform the task, OR\n"
+                "2. Honestly explain what you can do and ask the user for clarification.\n"
+                "Do NOT repeat the same claims without using tools."
+            )
+            messages.append({"role": "user", "content": correction})
+
+            # Run a second pass so the model can self-correct
+            final_content_2, tools_used_2, messages = await self._run_single_pass(
+                messages, on_progress, remaining_iterations=self.max_iterations - iteration,
+            )
+            tools_used.extend(tools_used_2)
+            if final_content_2 is not None:
+                final_content = final_content_2
+
+        return final_content, tools_used, messages
+
+    async def _run_single_pass(
+        self,
+        messages: list[dict],
+        on_progress: Callable[..., Awaitable[None]] | None = None,
+        remaining_iterations: int = 10,
+    ) -> tuple[str | None, list[str], list[dict]]:
+        """Run a limited continuation of the agent loop (used by hallucination guard)."""
+        iteration = 0
+        final_content = None
+        tools_used: list[str] = []
+
+        while iteration < remaining_iterations:
+            iteration += 1
+
+            response = await self.provider.chat(
+                messages=messages,
+                tools=self.tools.get_definitions(),
+                model=self.model,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
+
+            if response.has_tool_calls:
+                if on_progress:
+                    clean = self._strip_think(response.content)
+                    if clean:
+                        await on_progress(clean)
+                    await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
+
+                tool_call_dicts = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False)
+                        }
+                    }
+                    for tc in response.tool_calls
+                ]
+                messages = self.context.add_assistant_message(
+                    messages, response.content, tool_call_dicts,
+                    reasoning_content=response.reasoning_content,
+                )
+
+                for tool_call in response.tool_calls:
+                    tools_used.append(tool_call.name)
+                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
+                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    messages = self.context.add_tool_result(
+                        messages, tool_call.id, tool_call.name, result
+                    )
+            else:
+                final_content = self._strip_think(response.content)
+                break
 
         return final_content, tools_used, messages
 
