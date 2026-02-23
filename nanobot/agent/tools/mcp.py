@@ -44,6 +44,12 @@ class MCPToolWrapper(Tool):
         except asyncio.TimeoutError:
             logger.warning("MCP tool '{}' timed out after {}s", self._name, self._tool_timeout)
             return f"(MCP tool call timed out after {self._tool_timeout}s)"
+        except asyncio.CancelledError:
+            logger.warning("MCP tool '{}' was cancelled (timeout/cancel scope)", self._name)
+            return f"(MCP tool call was cancelled after {self._tool_timeout}s)"
+        except Exception as e:
+            logger.warning("MCP tool '{}' failed: {}", self._name, e)
+            return f"(MCP tool call failed: {e})"
         parts = []
         for block in result.content:
             if isinstance(block, types.TextContent):

@@ -1,5 +1,6 @@
 """Tool registry for dynamic tool management."""
 
+import asyncio
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
@@ -63,6 +64,8 @@ class ToolRegistry:
             if isinstance(result, str) and result.startswith("Error"):
                 return result + _HINT
             return result
+        except asyncio.CancelledError:
+            return f"Error executing {name}: tool call was cancelled" + _HINT
         except Exception as e:
             return f"Error executing {name}: {str(e)}" + _HINT
     
