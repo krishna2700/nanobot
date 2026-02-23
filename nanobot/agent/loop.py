@@ -43,6 +43,36 @@ class AgentLoop:
     5. Sends responses back
     """
 
+    # Patterns that suggest the LLM is simulating/fabricating tool execution
+    # rather than actually calling tools.
+    _SIMULATED_TOOL_PATTERNS = [
+        # Fake shell/command output blocks
+        r"```(?:bash|shell|sh|console|terminal)?\s*\n\$\s+.+\n",
+        # Phrases indicating fabricated results
+        r"(?:the (?:output|result|response|command|query) (?:shows?|returns?|gives?|is|was|would be))",
+        r"(?:running (?:the|this) (?:command|query|script) (?:gives?|returns?|shows?|produces?))",
+        r"(?:here(?:'s| is) the (?:output|result|response))",
+        r"(?:I (?:ran|executed|called|invoked) (?:the|this))",
+        # Fabricated database/API output
+        r"(?:the (?:database|db|api|server|service) (?:returned|responded|shows?))",
+        # Simulated file content without read_file
+        r"(?:the file (?:contains?|shows?|has))",
+        r"(?:(?:contents?|content) of (?:the )?file)",
+    ]
+
+    # Compiled pattern for efficiency
+    _SIMULATED_TOOL_RE = re.compile(
+        "|".join(_SIMULATED_TOOL_PATTERNS), re.IGNORECASE
+    )
+
+    # Message sent to the LLM when simulated tool execution is detected
+    _SIMULATED_TOOL_NUDGE = (
+        "It looks like you described a tool's result without actually calling the tool. "
+        "Please use the actual tool calls available to you (exec, read_file, write_file, etc.) "
+        "to perform the action for real. Do NOT fabricate or simulate results — "
+        "make the real tool call and use its actual output."
+    )
+
     def __init__(
         self,
         bus: MessageBus,
@@ -60,6 +90,7 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        strict_tool_execution: bool = False,
     ):
         from nanobot.config.schema import ExecToolConfig
         self.bus = bus
@@ -75,6 +106,7 @@ class AgentLoop:
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
+        self.strict_tool_execution = strict_tool_execution
 
         self.context = ContextBuilder(workspace)
         self.sessions = session_manager or SessionManager(workspace)
@@ -161,6 +193,20 @@ class AgentLoop:
             return None
         return re.sub(r"<think>[\s\S]*?</think>", "", text).strip() or None
 
+    @classmethod
+    def _looks_like_simulated_tool_use(cls, text: str | None) -> bool:
+        """Detect if the LLM response appears to simulate/fabricate tool execution.
+
+        Returns True when the text contains patterns that suggest the model
+        is pretending to run commands, read files, or query databases rather
+        than making actual tool calls.
+        """
+        if not text:
+            return False
+        # Strip think blocks first so reasoning traces don't trigger false positives
+        clean = re.sub(r"<think>[\s\S]*?</think>", "", text)
+        return bool(cls._SIMULATED_TOOL_RE.search(clean))
+
     @staticmethod
     def _tool_hint(tool_calls: list) -> str:
         """Format tool calls as concise hint, e.g. 'web_search("query")'."""
@@ -170,6 +216,10 @@ class AgentLoop:
                 return tc.name
             return f'{tc.name}("{val[:40]}…")' if len(val) > 40 else f'{tc.name}("{val}")'
         return ", ".join(_fmt(tc) for tc in tool_calls)
+
+    # Maximum number of times we'll nudge the model to use real tool calls
+    # when simulated execution is detected.
+    _MAX_SIMULATED_RETRIES = 2
 
     async def _run_agent_loop(
         self,
@@ -181,6 +231,9 @@ class AgentLoop:
         iteration = 0
         final_content = None
         tools_used: list[str] = []
+        simulated_retries = 0
+        # After a simulated-execution nudge, force the model to call a tool
+        force_tool_next = False
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -191,7 +244,9 @@ class AgentLoop:
                 model=self.model,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
+                tool_choice="required" if force_tool_next else None,
             )
+            force_tool_next = False
 
             if response.has_tool_calls:
                 if on_progress:
@@ -225,7 +280,35 @@ class AgentLoop:
                         messages, tool_call.id, tool_call.name, result
                     )
             else:
-                final_content = self._strip_think(response.content)
+                clean_content = self._strip_think(response.content)
+
+                # Detect simulated tool execution: the LLM returned text that
+                # looks like it fabricated tool results instead of calling tools.
+                if (
+                    self.strict_tool_execution
+                    and simulated_retries < self._MAX_SIMULATED_RETRIES
+                    and self._looks_like_simulated_tool_use(clean_content)
+                ):
+                    simulated_retries += 1
+                    logger.warning(
+                        "Simulated tool execution detected (retry {}/{}), nudging model",
+                        simulated_retries,
+                        self._MAX_SIMULATED_RETRIES,
+                    )
+                    # Add the assistant's response and a user nudge to retry
+                    messages = self.context.add_assistant_message(
+                        messages, response.content,
+                        reasoning_content=response.reasoning_content,
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": self._SIMULATED_TOOL_NUDGE,
+                    })
+                    # On the next iteration, force the model to produce a tool call
+                    force_tool_next = True
+                    continue
+
+                final_content = clean_content
                 break
 
         if final_content is None and iteration >= self.max_iterations:

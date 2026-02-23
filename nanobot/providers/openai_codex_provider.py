@@ -31,6 +31,7 @@ class OpenAICodexProvider(LLMProvider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        tool_choice: str | None = None,
     ) -> LLMResponse:
         model = model or self.default_model
         system_prompt, input_items = _convert_messages(messages)
@@ -47,7 +48,7 @@ class OpenAICodexProvider(LLMProvider):
             "text": {"verbosity": "medium"},
             "include": ["reasoning.encrypted_content"],
             "prompt_cache_key": _prompt_cache_key(messages),
-            "tool_choice": "auto",
+            "tool_choice": tool_choice or "auto",
             "parallel_tool_calls": True,
         }
 

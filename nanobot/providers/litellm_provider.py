@@ -170,6 +170,7 @@ class LiteLLMProvider(LLMProvider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        tool_choice: str | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request via LiteLLM.
@@ -180,6 +181,7 @@ class LiteLLMProvider(LLMProvider):
             model: Model identifier (e.g., 'anthropic/claude-sonnet-4-5').
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
+            tool_choice: Tool choice strategy — "auto" (default), "required", or "none".
         
         Returns:
             LLMResponse with content and/or tool calls.
@@ -218,7 +220,7 @@ class LiteLLMProvider(LLMProvider):
         
         if tools:
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+            kwargs["tool_choice"] = tool_choice or "auto"
         
         try:
             response = await acompletion(**kwargs)
