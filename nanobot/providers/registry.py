@@ -357,6 +357,25 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
 
     # === Local deployment (matched by config key, NOT by api_base) =========
 
+    # Ollama: local LLM server, uses ollama_chat/ prefix for LiteLLM.
+    # Detected when config key is "ollama" or api_base contains "11434" (default port).
+    ProviderSpec(
+        name="ollama",
+        keywords=("ollama",),
+        env_key="OLLAMA_API_KEY",
+        display_name="Ollama",
+        litellm_prefix="ollama_chat",       # llama3.2:1b → ollama_chat/llama3.2:1b
+        skip_prefixes=("ollama/", "ollama_chat/"),
+        env_extras=(),
+        is_gateway=False,
+        is_local=True,
+        detect_by_key_prefix="",
+        detect_by_base_keyword="11434",     # Ollama's default port
+        default_api_base="http://localhost:11434",
+        strip_model_prefix=False,
+        model_overrides=(),
+    ),
+
     # vLLM / any OpenAI-compatible local server.
     # Detected when config key is "vllm" (provider_name="vllm").
     ProviderSpec(

@@ -217,6 +217,7 @@ class ProvidersConfig(Base):
     groq: ProviderConfig = Field(default_factory=ProviderConfig)
     zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
     dashscope: ProviderConfig = Field(default_factory=ProviderConfig)  # 阿里云通义千问
+    ollama: ProviderConfig = Field(default_factory=ProviderConfig)  # Ollama local LLM server
     vllm: ProviderConfig = Field(default_factory=ProviderConfig)
     gemini: ProviderConfig = Field(default_factory=ProviderConfig)
     moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
