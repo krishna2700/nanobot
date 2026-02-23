@@ -263,12 +263,17 @@ class FeishuChannel(BaseChannel):
         self._running = True
         self._loop = asyncio.get_running_loop()
         
-        # Create Lark client for sending messages
-        self._client = lark.Client.builder() \
+        # Build Lark client for sending messages
+        client_builder = lark.Client.builder() \
             .app_id(self.config.app_id) \
             .app_secret(self.config.app_secret) \
-            .log_level(lark.LogLevel.INFO) \
-            .build()
+            .log_level(lark.LogLevel.INFO)
+        if self.config.domain:
+            client_builder = client_builder.domain(self.config.domain)
+        self._client = client_builder.build()
+        
+        # Resolve domain for WebSocket client
+        domain = self.config.domain or "https://open.feishu.cn"
         
         # Create event handler (only register message receive, ignore other events)
         event_handler = lark.EventDispatcherHandler.builder(
@@ -278,28 +283,49 @@ class FeishuChannel(BaseChannel):
             self._on_message_sync
         ).build()
         
-        # Create WebSocket client for long connection
-        self._ws_client = lark.ws.Client(
-            self.config.app_id,
-            self.config.app_secret,
-            event_handler=event_handler,
-            log_level=lark.LogLevel.INFO
-        )
-        
-        # Start WebSocket client in a separate thread with reconnect loop
+        # Start WebSocket client in a separate thread.
+        # The lark.ws.Client creates its own asyncio event loop internally,
+        # so it MUST be instantiated inside the thread to avoid conflicts
+        # with the main asyncio loop.
         def run_ws():
+            from lark_oapi.ws.exception import ClientException
+
             while self._running:
                 try:
+                    # Create a fresh WebSocket client each attempt inside the
+                    # worker thread so its internal asyncio primitives (Lock,
+                    # event-loop) belong to the thread-local loop the SDK
+                    # creates at module level.
+                    self._ws_client = lark.ws.Client(
+                        self.config.app_id,
+                        self.config.app_secret,
+                        event_handler=event_handler,
+                        log_level=lark.LogLevel.INFO,
+                        domain=domain,
+                        auto_reconnect=True,
+                    )
+                    logger.info("Feishu WebSocket connecting to {} ...", domain)
                     self._ws_client.start()
+                except ClientException as e:
+                    # ClientException = fatal errors (invalid credentials,
+                    # app not enabled, etc.).  Log clearly and retry with
+                    # a longer back-off so the log isn't flooded.
+                    logger.error(
+                        "Feishu WebSocket connection rejected (check app_id / app_secret "
+                        "and ensure the app has WebSocket long-connection enabled "
+                        "on the Feishu Open Platform): {}", e,
+                    )
+                    if self._running:
+                        import time; time.sleep(30)
                 except Exception as e:
                     logger.warning("Feishu WebSocket error: {}", e)
-                if self._running:
-                    import time; time.sleep(5)
+                    if self._running:
+                        import time; time.sleep(5)
         
         self._ws_thread = threading.Thread(target=run_ws, daemon=True)
         self._ws_thread.start()
         
-        logger.info("Feishu bot started with WebSocket long connection")
+        logger.info("Feishu bot started with WebSocket long connection (domain: {})", domain)
         logger.info("No public IP required - using WebSocket to receive events")
         
         # Keep running until stopped
