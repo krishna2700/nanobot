@@ -26,7 +26,11 @@ class CronTool(Tool):
     
     @property
     def description(self) -> str:
-        return "Schedule reminders and recurring tasks. Actions: add, list, remove."
+        return (
+            "Schedule reminders and recurring tasks. Actions: add, list, remove. "
+            "Use type='reminder' to deliver the message verbatim, or type='task' "
+            "(default) to have the agent execute the message as an instruction."
+        )
     
     @property
     def parameters(self) -> dict[str, Any]:
@@ -40,7 +44,15 @@ class CronTool(Tool):
                 },
                 "message": {
                     "type": "string",
-                    "description": "Reminder message (for add)"
+                    "description": "Reminder or task message (for add)"
+                },
+                "type": {
+                    "type": "string",
+                    "enum": ["reminder", "task"],
+                    "description": (
+                        "Job type: 'reminder' delivers the message verbatim to the user, "
+                        "'task' sends it to the agent for execution. Defaults to 'task'."
+                    )
                 },
                 "every_seconds": {
                     "type": "integer",
@@ -70,6 +82,7 @@ class CronTool(Tool):
         self,
         action: str,
         message: str = "",
+        type: str = "task",
         every_seconds: int | None = None,
         cron_expr: str | None = None,
         tz: str | None = None,
@@ -78,7 +91,7 @@ class CronTool(Tool):
         **kwargs: Any
     ) -> str:
         if action == "add":
-            return self._add_job(message, every_seconds, cron_expr, tz, at)
+            return self._add_job(message, type, every_seconds, cron_expr, tz, at)
         elif action == "list":
             return self._list_jobs()
         elif action == "remove":
@@ -88,6 +101,7 @@ class CronTool(Tool):
     def _add_job(
         self,
         message: str,
+        type: str,
         every_seconds: int | None,
         cron_expr: str | None,
         tz: str | None,
@@ -95,6 +109,8 @@ class CronTool(Tool):
     ) -> str:
         if not message:
             return "Error: message is required for add"
+        if type not in ("reminder", "task"):
+            return "Error: type must be 'reminder' or 'task'"
         if not self._channel or not self._chat_id:
             return "Error: no session context (channel/chat_id)"
         if tz and not cron_expr:
@@ -125,18 +141,19 @@ class CronTool(Tool):
             name=message[:30],
             schedule=schedule,
             message=message,
+            type=type,
             deliver=True,
             channel=self._channel,
             to=self._chat_id,
             delete_after_run=delete_after,
         )
-        return f"Created job '{job.name}' (id: {job.id})"
+        return f"Created {type} job '{job.name}' (id: {job.id})"
     
     def _list_jobs(self) -> str:
         jobs = self._cron.list_jobs()
         if not jobs:
             return "No scheduled jobs."
-        lines = [f"- {j.name} (id: {j.id}, {j.schedule.kind})" for j in jobs]
+        lines = [f"- {j.name} (id: {j.id}, {j.schedule.kind}, {j.payload.type})" for j in jobs]
         return "Scheduled jobs:\n" + "\n".join(lines)
     
     def _remove_job(self, job_id: str | None) -> str:

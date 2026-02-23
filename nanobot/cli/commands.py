@@ -323,7 +323,20 @@ def gateway(
     
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
-        """Execute a cron job through the agent."""
+        """Execute a cron job through the agent or deliver a reminder."""
+        from nanobot.bus.events import OutboundMessage
+
+        if job.payload.type == "reminder":
+            # Deliver the message verbatim, bypassing the agent/LLM
+            if job.payload.deliver and job.payload.to:
+                await bus.publish_outbound(OutboundMessage(
+                    channel=job.payload.channel or "cli",
+                    chat_id=job.payload.to,
+                    content=job.payload.message,
+                ))
+            return job.payload.message
+
+        # type == "task": execute via agent
         response = await agent.process_direct(
             job.payload.message,
             session_key=f"cron:{job.id}",
@@ -331,7 +344,6 @@ def gateway(
             chat_id=job.payload.to or "direct",
         )
         if job.payload.deliver and job.payload.to:
-            from nanobot.bus.events import OutboundMessage
             await bus.publish_outbound(OutboundMessage(
                 channel=job.payload.channel or "cli",
                 chat_id=job.payload.to,
@@ -970,6 +982,12 @@ def cron_run(
     result_holder = []
 
     async def on_job(job: CronJob) -> str | None:
+        if job.payload.type == "reminder":
+            # Deliver the message verbatim, bypassing the agent/LLM
+            result_holder.append(job.payload.message)
+            return job.payload.message
+
+        # type == "task": execute via agent
         response = await agent_loop.process_direct(
             job.payload.message,
             session_key=f"cron:{job.id}",
