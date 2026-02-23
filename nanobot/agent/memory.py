@@ -66,6 +66,31 @@ class MemoryStore:
         long_term = self.read_long_term()
         return f"## Long-term Memory\n{long_term}" if long_term else ""
 
+    @staticmethod
+    def _content_to_str(content: object) -> str:
+        """Convert message content of any type to a plain string.
+
+        Handles multimodal content (list of dicts with ``type``/``text`` keys),
+        plain dicts, and other non-string types that may appear in session
+        messages (e.g. image attachments from Telegram).
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            # Multimodal content: extract text parts, skip images/binary.
+            parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text") or item.get("content") or ""
+                    if text:
+                        parts.append(str(text))
+                else:
+                    parts.append(str(item))
+            return " ".join(parts) if parts else ""
+        if isinstance(content, dict):
+            return json.dumps(content, ensure_ascii=False)
+        return str(content) if content is not None else ""
+
     async def consolidate(
         self,
         session: Session,
@@ -94,15 +119,20 @@ class MemoryStore:
                 return True
             logger.info("Memory consolidation: {} to consolidate, {} keep", len(old_messages), keep_count)
 
-        lines = []
-        for m in old_messages:
-            if not m.get("content"):
-                continue
-            tools = f" [tools: {', '.join(m['tools_used'])}]" if m.get("tools_used") else ""
-            lines.append(f"[{m.get('timestamp', '?')[:16]}] {m['role'].upper()}{tools}: {m['content']}")
+        try:
+            lines = []
+            for m in old_messages:
+                content_str = self._content_to_str(m.get("content"))
+                if not content_str:
+                    continue
+                tools = f" [tools: {', '.join(m['tools_used'])}]" if m.get("tools_used") else ""
+                ts = m.get("timestamp") or "?"
+                if not isinstance(ts, str):
+                    ts = str(ts)
+                lines.append(f"[{ts[:16]}] {m['role'].upper()}{tools}: {content_str}")
 
-        current_memory = self.read_long_term()
-        prompt = f"""Process this conversation and call the save_memory tool with your consolidation.
+            current_memory = self.read_long_term()
+            prompt = f"""Process this conversation and call the save_memory tool with your consolidation.
 
 ## Current Long-term Memory
 {current_memory or "(empty)"}
@@ -110,7 +140,6 @@ class MemoryStore:
 ## Conversation to Process
 {chr(10).join(lines)}"""
 
-        try:
             response = await provider.chat(
                 messages=[
                     {"role": "system", "content": "You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation."},
@@ -125,6 +154,18 @@ class MemoryStore:
                 return False
 
             args = response.tool_calls[0].arguments
+            # Ollama / local models may return arguments as a JSON string
+            # instead of a parsed dict; handle gracefully.
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("Memory consolidation: could not parse tool arguments: {}", args[:200])
+                    return False
+            if not isinstance(args, dict):
+                logger.warning("Memory consolidation: unexpected arguments type {}", type(args).__name__)
+                return False
+
             if entry := args.get("history_entry"):
                 if not isinstance(entry, str):
                     entry = json.dumps(entry, ensure_ascii=False)

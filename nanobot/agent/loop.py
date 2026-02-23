@@ -439,10 +439,14 @@ class AgentLoop:
 
     async def _consolidate_memory(self, session, archive_all: bool = False) -> bool:
         """Delegate to MemoryStore.consolidate(). Returns True on success."""
-        return await MemoryStore(self.workspace).consolidate(
-            session, self.provider, self.model,
-            archive_all=archive_all, memory_window=self.memory_window,
-        )
+        try:
+            return await MemoryStore(self.workspace).consolidate(
+                session, self.provider, self.model,
+                archive_all=archive_all, memory_window=self.memory_window,
+            )
+        except Exception:
+            logger.exception("Memory consolidation failed")
+            return False
 
     async def process_direct(
         self,
