@@ -8,6 +8,7 @@ import json_repair
 from openai import AsyncOpenAI
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from nanobot.providers.tool_call_parsers import maybe_extract_content_tool_calls
 
 
 class CustomProvider(LLMProvider):
@@ -41,11 +42,14 @@ class CustomProvider(LLMProvider):
             for tc in (msg.tool_calls or [])
         ]
         u = response.usage
-        return LLMResponse(
+        result = LLMResponse(
             content=msg.content, tool_calls=tool_calls, finish_reason=choice.finish_reason or "stop",
             usage={"prompt_tokens": u.prompt_tokens, "completion_tokens": u.completion_tokens, "total_tokens": u.total_tokens} if u else {},
             reasoning_content=getattr(msg, "reasoning_content", None) or None,
         )
+        # Extract tool calls from content for models that use XML tags
+        # (e.g. LongCat wraps calls in <longcat_tool_call> tags).
+        return maybe_extract_content_tool_calls(result)
 
     def get_default_model(self) -> str:
         return self.default_model

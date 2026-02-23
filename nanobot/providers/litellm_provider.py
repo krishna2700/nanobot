@@ -10,6 +10,7 @@ from litellm import acompletion
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.providers.registry import find_by_model, find_gateway
+from nanobot.providers.tool_call_parsers import maybe_extract_content_tool_calls
 
 
 # Standard OpenAI chat-completion message keys; extras (e.g. reasoning_content) are stripped for strict providers.
@@ -259,13 +260,16 @@ class LiteLLMProvider(LLMProvider):
         
         reasoning_content = getattr(message, "reasoning_content", None) or None
         
-        return LLMResponse(
+        response = LLMResponse(
             content=message.content,
             tool_calls=tool_calls,
             finish_reason=choice.finish_reason or "stop",
             usage=usage,
             reasoning_content=reasoning_content,
         )
+        # Extract tool calls from content for models that use XML tags
+        # (e.g. LongCat wraps calls in <longcat_tool_call> tags).
+        return maybe_extract_content_tool_calls(response)
     
     def get_default_model(self) -> str:
         """Get the default model."""
