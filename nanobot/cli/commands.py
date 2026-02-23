@@ -364,15 +364,12 @@ def gateway(
         """Execute heartbeat through the agent."""
         channel, chat_id = _pick_heartbeat_target()
 
-        async def _silent(*_args, **_kwargs):
-            pass
-
         return await agent.process_direct(
             prompt,
             session_key="heartbeat",
             channel=channel,
             chat_id=chat_id,
-            on_progress=_silent,  # suppress: heartbeat should not push progress to external channels
+            # on_progress defaults to silent — background tasks never leak to chat
         )
 
     async def on_heartbeat_notify(response: str) -> None:

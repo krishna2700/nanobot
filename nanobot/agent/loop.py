@@ -155,6 +155,10 @@ class AgentLoop:
                 cron_tool.set_context(channel, chat_id)
 
     @staticmethod
+    async def _silent_progress(*_args: Any, **_kwargs: Any) -> None:
+        """No-op progress callback used to suppress streaming for background tasks."""
+
+    @staticmethod
     def _strip_think(text: str | None) -> str | None:
         """Remove <think>…</think> blocks that some models embed in content."""
         if not text:
@@ -452,8 +456,15 @@ class AgentLoop:
         chat_id: str = "direct",
         on_progress: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
-        """Process a message directly (for CLI or cron usage)."""
+        """Process a message directly (for CLI or cron usage).
+
+        By default, progress streaming is suppressed so that background
+        callers (cron jobs, subagents) do not leak internal tool calls
+        to the user's chat.  Pass an explicit *on_progress* callback to
+        enable streaming (e.g. for the interactive CLI).
+        """
         await self._connect_mcp()
         msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
-        response = await self._process_message(msg, session_key=session_key, on_progress=on_progress)
+        progress = on_progress or self._silent_progress
+        response = await self._process_message(msg, session_key=session_key, on_progress=progress)
         return response.content if response else ""
