@@ -1,6 +1,7 @@
 """Heartbeat service - periodic agent wake-up to check for tasks."""
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any, Callable, Coroutine
 
@@ -14,9 +15,26 @@ HEARTBEAT_OK_TOKEN = "HEARTBEAT_OK"
 
 # The prompt sent to agent during heartbeat
 HEARTBEAT_PROMPT = (
-    "Read HEARTBEAT.md in your workspace and follow any instructions listed there. "
-    f"If nothing needs attention, reply with exactly: {HEARTBEAT_OK_TOKEN}"
+    "Let me check if `HEARTBEAT.md` exists in the workspace and read its contents.\n\n"
+    "IMPORTANT: If the file does not exist, is empty, or contains no actionable tasks, "
+    f"you MUST reply with ONLY the following token and nothing else:\n{HEARTBEAT_OK_TOKEN}\n\n"
+    "Do NOT describe what you are doing. Do NOT narrate your actions. "
+    f"If there is nothing to do, just reply: {HEARTBEAT_OK_TOKEN}\n"
+    "Only if there are real, actionable tasks in HEARTBEAT.md should you execute them "
+    "and report the results."
 )
+
+# Patterns that indicate the agent found nothing to do but didn't use the OK token.
+# These catch common LLM narration responses like "Let me check if HEARTBEAT.md exists..."
+_NOOP_PATTERNS = [
+    re.compile(r"no\s+(actionable\s+)?tasks?\b", re.IGNORECASE),
+    re.compile(r"nothing\s+(needs|requires|to)\s+(attention|action|do|report)", re.IGNORECASE),
+    re.compile(r"no\s+(instructions|items|entries)\s+(listed|found|to)", re.IGNORECASE),
+    re.compile(r"file\s+(does\s+not|doesn'?t)\s+exist", re.IGNORECASE),
+    re.compile(r"HEARTBEAT\.md\s+(is\s+empty|does\s+not|doesn'?t|was\s+not|wasn'?t)", re.IGNORECASE),
+    re.compile(r"(empty|no\s+content|nothing)\s+in\s+HEARTBEAT", re.IGNORECASE),
+    re.compile(r"(?:could|can)\s*(?:not|n'?t)\s+(?:find|read|open|access)\s+.*HEARTBEAT", re.IGNORECASE),
+]
 
 
 def _is_heartbeat_empty(content: str | None) -> bool:
@@ -34,6 +52,30 @@ def _is_heartbeat_empty(content: str | None) -> bool:
         return False  # Found actionable content
     
     return True
+
+
+def _is_noop_response(response: str) -> bool:
+    """Return True if the agent response indicates nothing actionable was found.
+
+    The LLM sometimes narrates its actions (e.g. "Let me check if HEARTBEAT.md
+    exists…") instead of replying with the exact HEARTBEAT_OK token.  This
+    helper catches those cases so the narration is not forwarded to the user.
+    """
+    if not response:
+        return True
+
+    text = response.strip()
+
+    # Exact or embedded token
+    if HEARTBEAT_OK_TOKEN in text.upper():
+        return True
+
+    # Short responses that match known "nothing to do" patterns
+    for pat in _NOOP_PATTERNS:
+        if pat.search(text):
+            return True
+
+    return False
 
 
 class HeartbeatService:
@@ -121,7 +163,7 @@ class HeartbeatService:
         if self.on_heartbeat:
             try:
                 response = await self.on_heartbeat(HEARTBEAT_PROMPT)
-                if HEARTBEAT_OK_TOKEN in response.upper():
+                if _is_noop_response(response):
                     logger.info("Heartbeat: OK (nothing to report)")
                 else:
                     logger.info("Heartbeat: completed, delivering response")

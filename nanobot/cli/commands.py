@@ -383,12 +383,18 @@ def gateway(
             return  # No external channel available to deliver to
         await bus.publish_outbound(OutboundMessage(channel=channel, chat_id=chat_id, content=response))
 
+    # Only enable heartbeat when there are external channels that can
+    # deliver notifications.  When only CLI is available the periodic
+    # wake-up has no useful target and would just waste LLM calls.
+    heartbeat_has_channels = bool(
+        set(channels.enabled_channels) - {"cli"}
+    )
     heartbeat = HeartbeatService(
         workspace=config.workspace_path,
         on_heartbeat=on_heartbeat,
         on_notify=on_heartbeat_notify,
         interval_s=30 * 60,  # 30 minutes
-        enabled=True
+        enabled=heartbeat_has_channels,
     )
     
     if channels.enabled_channels:
