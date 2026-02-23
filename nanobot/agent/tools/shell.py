@@ -32,6 +32,33 @@ class ExecTool(Tool):
             r">\s*/dev/sd",                  # write to disk
             r"\b(shutdown|reboot|poweroff)\b",  # system power
             r":\(\)\s*\{.*\};\s*:",          # fork bomb
+
+            # --- Scripting-language bypass prevention (Issue #979) ---
+            # Python destructive filesystem calls
+            r"shutil\.rmtree",
+            r"os\.(remove|rmdir|unlink|removedirs)\s*\(",
+            r"pathlib\.Path\s*\(.*\)\s*\.\s*(unlink|rmdir)",
+            r"\.unlink\s*\(",                # pathlib p.unlink()
+            r"send2trash",                   # third-party trash utility
+
+            # Perl destructive calls
+            r"\bperl\b.*\b(unlink|rmtree)\b",
+            r"\bperl\b.*File::Path",
+
+            # Ruby destructive calls
+            r"\bruby\b.*FileUtils\.(rm_rf|rm_r|remove_entry_secure|remove_dir)",
+            r"\bruby\b.*File\.(delete|unlink)",
+
+            # Node.js destructive calls
+            r"\bnode\b.*\bfs\b.*\b(rmSync|rmdirSync|unlinkSync|rm)\b",
+            r"\bnode\b.*\brimraf\b",
+            r"\bnode\b.*fs\.promises\.(rm|rmdir|unlink)",
+
+            # Generic: interpreter -c/-e with rm/delete/unlink inside
+            r"\b(python[23]?|perl|ruby)\b\s+-[ce]\s+.*\brm\b",
+            r"\b(python[23]?|perl|ruby)\b\s+-[ce]\s+.*\bunlink\b",
+            r"\b(python[23]?|perl|ruby)\b\s+-[ce]\s+.*\brmtree\b",
+            r"\b(python[23]?|perl|ruby)\b\s+-[ce]\s+.*\bremove\b",
         ]
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
