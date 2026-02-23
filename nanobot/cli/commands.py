@@ -200,6 +200,7 @@ def onboard():
 
 def _create_workspace_templates(workspace: Path):
     """Create default workspace template files from bundled templates."""
+    import shutil
     from importlib.resources import files as pkg_files
 
     templates_dir = pkg_files("nanobot") / "templates"
@@ -226,7 +227,19 @@ def _create_workspace_templates(workspace: Path):
         history_file.write_text("", encoding="utf-8")
         console.print("  [dim]Created memory/HISTORY.md[/dim]")
 
-    (workspace / "skills").mkdir(exist_ok=True)
+    # Seed built-in skills into workspace (users can modify/remove freely)
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(exist_ok=True)
+
+    skills_template_dir = templates_dir / "skills"
+    if skills_template_dir.is_dir():
+        for skill_item in skills_template_dir.iterdir():
+            if not skill_item.is_dir():
+                continue
+            dest_skill = skills_dir / skill_item.name
+            if not dest_skill.exists():
+                shutil.copytree(str(skill_item), str(dest_skill))
+                console.print(f"  [dim]Created skills/{skill_item.name}/[/dim]")
 
 
 def _make_provider(config: Config):

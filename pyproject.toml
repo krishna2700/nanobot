@@ -64,13 +64,12 @@ packages = ["nanobot"]
 [tool.hatch.build.targets.wheel.sources]
 "nanobot" = "nanobot"
 
-# Include non-Python files in skills and templates
+# Include non-Python files in templates (skills are now seeded from templates)
 [tool.hatch.build]
 include = [
     "nanobot/**/*.py",
     "nanobot/templates/**/*.md",
-    "nanobot/skills/**/*.md",
-    "nanobot/skills/**/*.sh",
+    "nanobot/templates/**/*.sh",
 ]
 
 [tool.hatch.build.targets.sdist]

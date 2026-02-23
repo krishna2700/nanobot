@@ -1,6 +1,11 @@
 # nanobot Skills
 
-This directory contains built-in skills that extend nanobot's capabilities.
+Skills are placed in the workspace `skills/` directory (`~/.nanobot/workspace/skills/` by default).
+
+## Getting Started
+
+Run `nanobot onboard` to populate your workspace with the default built-in skills.
+Skills are copied as regular files, so you can freely modify, remove, or add new ones.
 
 ## Skill Format
 
@@ -13,7 +18,7 @@ Each skill is a directory containing a `SKILL.md` file with:
 These skills are adapted from [OpenClaw](https://github.com/openclaw/openclaw)'s skill system.
 The skill format and metadata structure follow OpenClaw's conventions to maintain compatibility.
 
-## Available Skills
+## Default Skills
 
 | Skill | Description |
 |-------|-------------|
@@ -23,3 +28,5 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 | `tmux` | Remote-control tmux sessions |
 | `clawhub` | Search and install skills from ClawHub registry |
 | `skill-creator` | Create new skills |
+| `memory` | Two-layer memory system with grep-based recall |
+| `cron` | Schedule reminders and recurring tasks |
